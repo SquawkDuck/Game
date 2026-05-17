@@ -2,21 +2,100 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const QRCode = require('qrcode');
+const { get: getBlob, put: putBlob } = require('@vercel/blob');
+
+let getCache = null;
+try {
+  ({ getCache } = require('@vercel/functions'));
+} catch (error) {
+  getCache = null;
+}
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const MIN_PLAYERS = 1;
+const MAX_PLAYERS = 10;
+
+const MAP = {
+  image: '/hospital-map.png',
+  width: 1254,
+  height: 1254
+};
 
 const ROOM_LAYOUT = [
-  { id: 'lobby', name: 'Lobby', x: 1, y: 1, neighbors: ['triage', 'ward-a', 'meeting'] },
-  { id: 'triage', name: 'Triage', x: 1, y: 0, neighbors: ['lobby', 'pharmacy', 'laboratory'] },
-  { id: 'ward-a', name: 'Ward A', x: 0, y: 1, neighbors: ['lobby', 'ward-b', 'storage'] },
-  { id: 'ward-b', name: 'Ward B', x: 0, y: 2, neighbors: ['ward-a', 'isolation', 'meeting'] },
-  { id: 'pharmacy', name: 'Pharmacy', x: 2, y: 0, neighbors: ['triage', 'laboratory'] },
-  { id: 'laboratory', name: 'Laboratory', x: 2, y: 1, neighbors: ['triage', 'pharmacy', 'storage', 'isolation'] },
-  { id: 'storage', name: 'Storage', x: 1, y: 2, neighbors: ['ward-a', 'laboratory', 'meeting'] },
-  { id: 'isolation', name: 'Isolation', x: 2, y: 2, neighbors: ['ward-b', 'laboratory'] },
-  { id: 'meeting', name: 'Meeting Hall', x: 0, y: 0, neighbors: ['lobby', 'ward-b', 'storage'] }
+  { id: 'reception', name: 'Reception', area: rect(456, 807, 337, 352), spawn: point(626, 895) },
+  { id: 'waiting-room', name: 'Waiting Room', area: rect(468, 407, 330, 385), spawn: point(626, 475) },
+  { id: 'emergency-room', name: 'Emergency Room', area: rect(38, 787, 407, 372), spawn: point(255, 995) },
+  { id: 'operating-room', name: 'Operating Room', area: rect(775, 807, 448, 352), spawn: point(858, 1038) },
+  { id: 'icu', name: 'ICU', area: rect(810, 489, 411, 283), spawn: point(825, 712) },
+  { id: 'patient-ward', name: 'Patient Ward', area: rect(37, 407, 410, 362), spawn: point(330, 604) },
+  { id: 'laboratory', name: 'Laboratory', area: rect(36, 50, 410, 340), spawn: point(252, 216) },
+  { id: 'pharmacy', name: 'Pharmacy', area: rect(465, 48, 320, 336), spawn: point(620, 182) },
+  { id: 'staff-break-room', name: 'Staff Break Room', area: rect(804, 48, 386, 340), spawn: point(992, 218) }
 ];
+
+const WALKABLE_AREAS = [
+  ...ROOM_LAYOUT.map((room) => room.area),
+  rect(388, 392, 520, 90),
+  rect(448, 482, 360, 318),
+  rect(430, 766, 405, 70),
+  rect(548, 800, 188, 148),
+  rect(390, 185, 80, 295),
+  rect(785, 380, 165, 118),
+  rect(195, 760, 75, 95),
+  rect(918, 760, 120, 92)
+];
+
+const BLOCKING_VOLUMES = [
+  rect(48, 74, 132, 96),
+  rect(48, 172, 70, 205),
+  rect(190, 256, 138, 70),
+  rect(285, 78, 82, 76),
+  rect(520, 68, 212, 94),
+  rect(535, 250, 176, 96),
+  rect(820, 76, 66, 124),
+  rect(930, 88, 116, 88),
+  rect(1080, 74, 63, 116),
+  rect(804, 198, 62, 150),
+  rect(874, 248, 96, 74),
+  rect(1038, 256, 112, 92),
+  rect(70, 470, 72, 122),
+  rect(185, 470, 78, 122),
+  rect(70, 628, 72, 122),
+  rect(185, 628, 78, 122),
+  rect(290, 684, 132, 62),
+  rect(574, 544, 138, 63),
+  rect(570, 710, 142, 66),
+  rect(720, 504, 52, 102),
+  rect(65, 844, 78, 124),
+  rect(170, 834, 78, 128),
+  rect(274, 848, 132, 108),
+  rect(130, 1050, 226, 78),
+  rect(530, 1010, 210, 102),
+  rect(835, 560, 78, 124),
+  rect(955, 560, 78, 124),
+  rect(1080, 560, 78, 124),
+  rect(1115, 510, 76, 76),
+  rect(944, 878, 124, 164),
+  rect(900, 842, 232, 82),
+  rect(1120, 850, 72, 220)
+];
+
+const LEGACY_ROOM_IDS = {
+  lobby: 'reception',
+  triage: 'waiting-room',
+  'ward-a': 'patient-ward',
+  'ward-b': 'patient-ward',
+  storage: 'waiting-room',
+  isolation: 'icu',
+  meeting: 'waiting-room'
+};
+
+const MOVE_STEP = 26;
+const PLAYER_RADIUS = 16;
+const MEETING_ROOM_ID = 'waiting-room';
+const ROOM_CACHE_TTL_SECONDS = 60 * 60 * 6;
 
 const ROOM_BY_ID = Object.fromEntries(ROOM_LAYOUT.map((room) => [room.id, room]));
 const COLORS = ['#e14d4d', '#3c82f6', '#16a34a', '#f59e0b', '#8b5cf6', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#64748b'];
@@ -30,6 +109,34 @@ const CORRUPTION_DURATION = {
 
 const rooms = new Map();
 const subscribers = new Set();
+const USE_BLOB_STORAGE = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+const USE_RUNTIME_CACHE = Boolean(process.env.VERCEL && getCache);
+const ALLOW_MEMORY_STORAGE_FALLBACK = !process.env.VERCEL || process.env.ALLOW_MEMORY_ROOM_FALLBACK === '1';
+let storageFallbackWarned = false;
+
+function rect(x, y, width, height) {
+  return { x, y, width, height };
+}
+
+function point(x, y) {
+  return { x, y };
+}
+
+function warnStorageFallback(error) {
+  if (storageFallbackWarned) return;
+  storageFallbackWarned = true;
+  console.warn('Room persistence unavailable; using in-memory state only.', error.message || error);
+}
+
+function roomCache() {
+  if (!USE_RUNTIME_CACHE) return null;
+  try {
+    return getCache({ namespace: 'hospital-infection-rooms' });
+  } catch (error) {
+    warnStorageFallback(error);
+    return null;
+  }
+}
 
 function now() {
   return Date.now();
@@ -54,6 +161,7 @@ function createRoom() {
     phase: 'lobby',
     players: new Map(),
     createdAt: now(),
+    lastTickAt: now(),
     matchStartedAt: null,
     matchEndsAt: null,
     endedAt: null,
@@ -83,6 +191,10 @@ function publicPlayers(room) {
     name: player.name,
     color: player.color,
     roomId: player.roomId,
+    x: Math.round(player.x),
+    y: Math.round(player.y),
+    facing: player.facing || 'down',
+    moving: room.phase === 'playing' && now() - (player.lastMovedAt || 0) < 700,
     connected: player.connected,
     dead: player.dead
   }));
@@ -111,6 +223,7 @@ function publicState(room) {
     code: room.code,
     phase: room.phase,
     players: publicPlayers(room),
+    map: MAP,
     rooms: ROOM_LAYOUT,
     fluShots: room.fluShots,
     labProgress: room.labProgress,
@@ -131,8 +244,8 @@ function publicState(room) {
           needed: majorityCount(room)
         }
       : null,
-    maxPlayers: 10,
-    minPlayers: 4,
+    maxPlayers: MAX_PLAYERS,
+    minPlayers: MIN_PLAYERS,
     deathLimit: deathLimit(room),
     deaths: [...room.players.values()].filter((player) => player.dead).length,
     winner: room.winner,
@@ -155,6 +268,10 @@ function privateState(room, playerId) {
       color: player.color,
       role: player.role,
       roomId: player.roomId,
+      x: Math.round(player.x),
+      y: Math.round(player.y),
+      facing: player.facing || 'down',
+      moving: room.phase === 'playing' && now() - (player.lastMovedAt || 0) < 700,
       roomName: currentRoom?.name || player.roomId,
       corruption: player.corruption,
       corruptionSecondsLeft: Math.ceil(player.corruptionRemaining || 0),
@@ -169,7 +286,6 @@ function privateState(room, playerId) {
       canInfectRoom: player.role === 'infected' && !player.neutralized && !player.dead && room.phase === 'playing' && player.infectRoomCooldownUntil <= now(),
       canPickupFluShot: room.phase === 'playing' && !player.dead && !player.hasFluShot && room.fluShots[player.roomId] > 0,
       canWorkLab: room.phase === 'playing' && !player.dead && player.roomId === 'laboratory',
-      neighbors: currentRoom ? currentRoom.neighbors.map((roomId) => ROOM_BY_ID[roomId]) : [],
       voteTargets: activePlayers(room).map((p) => ({ id: p.id, name: p.name, dead: p.dead })),
       activeTrueInfectedRemaining: player.role === 'infected' ? trueInfectedAlive : undefined
     }
@@ -200,12 +316,13 @@ function pushRoom(room) {
 }
 
 function addPlayer(room, name) {
-  if (room.players.size >= 10) {
+  if (room.players.size >= MAX_PLAYERS) {
     throw new Error('This room is full.');
   }
   if (room.phase !== 'lobby') {
     throw new Error('This match has already started.');
   }
+  const spawn = spawnForRoom('reception');
   const player = {
     id: id(),
     name: cleanName(name, `Player ${room.players.size + 1}`),
@@ -213,7 +330,11 @@ function addPlayer(room, name) {
     connected: true,
     role: 'non-infected',
     neutralized: false,
-    roomId: 'lobby',
+    roomId: 'reception',
+    x: spawn.x,
+    y: spawn.y,
+    facing: 'down',
+    lastMovedAt: 0,
     corruption: 'healthy',
     corruptionRemaining: 0,
     exposureSeconds: 0,
@@ -232,9 +353,44 @@ function cleanName(value, fallback) {
   return name || fallback;
 }
 
+function normalizeRoomId(roomId) {
+  return ROOM_BY_ID[roomId] ? roomId : LEGACY_ROOM_IDS[roomId] || 'reception';
+}
+
+function spawnForRoom(roomId) {
+  return ROOM_BY_ID[normalizeRoomId(roomId)]?.spawn || ROOM_BY_ID.reception.spawn;
+}
+
+function roomAtPosition(x, y, fallback = 'reception') {
+  const room = ROOM_LAYOUT.find((candidate) => pointInRect(x, y, candidate.area));
+  return room?.id || normalizeRoomId(fallback);
+}
+
+function pointInRect(x, y, area) {
+  return x >= area.x && x <= area.x + area.width && y >= area.y && y <= area.y + area.height;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function isPositionWalkable(x, y) {
+  const radius = PLAYER_RADIUS;
+  const points = [
+    point(x, y),
+    point(x - radius, y),
+    point(x + radius, y),
+    point(x, y - radius),
+    point(x, y + radius)
+  ];
+  const inWalkableArea = points.every((candidate) => WALKABLE_AREAS.some((area) => pointInRect(candidate.x, candidate.y, area)));
+  if (!inWalkableArea) return false;
+  return !points.some((candidate) => BLOCKING_VOLUMES.some((volume) => pointInRect(candidate.x, candidate.y, volume)));
+}
+
 function startMatch(room) {
   if (room.phase !== 'lobby' && room.phase !== 'ended') throw new Error('Match cannot start now.');
-  if (room.players.size < 4) throw new Error('At least 4 players are required.');
+  if (room.players.size < MIN_PLAYERS) throw new Error('At least 1 player is required.');
   resetMatch(room);
   const players = [...room.players.values()];
   const infectedCount = trueInfectedTargetCount(players.length);
@@ -244,6 +400,7 @@ function startMatch(room) {
   spreadStartingPositions(players);
   room.phase = 'playing';
   room.matchStartedAt = now();
+  room.lastTickAt = now();
   room.matchEndsAt = now() + 10 * 60 * 1000;
   room.nextFluSpawnAt = now() + 60 * 1000;
   spawnFluShot(room, 'pharmacy');
@@ -252,21 +409,36 @@ function startMatch(room) {
 }
 
 function spreadStartingPositions(players) {
-  const gameplayRooms = shuffle(['lobby', 'triage', 'ward-a', 'ward-b', 'pharmacy', 'laboratory', 'storage', 'isolation']);
+  const gameplayRooms = shuffle(['reception', 'waiting-room', 'patient-ward', 'emergency-room', 'operating-room', 'icu', 'pharmacy', 'laboratory', 'staff-break-room']);
   const infected = players.filter((player) => player.role === 'infected');
   const nonInfected = players.filter((player) => player.role !== 'infected');
   infected.forEach((player, index) => {
-    player.roomId = gameplayRooms[index % gameplayRooms.length];
+    placePlayerInRoom(player, gameplayRooms[index % gameplayRooms.length]);
   });
   const saferRooms = gameplayRooms.slice(Math.min(infected.length, gameplayRooms.length));
   const spawnPool = saferRooms.length ? saferRooms : gameplayRooms;
   nonInfected.forEach((player, index) => {
-    player.roomId = spawnPool[index % spawnPool.length];
+    placePlayerInRoom(player, spawnPool[index % spawnPool.length]);
   });
+}
+
+function placePlayerInRoom(player, roomId) {
+  const spawn = spawnForRoom(roomId);
+  player.roomId = normalizeRoomId(roomId);
+  player.x = spawn.x;
+  player.y = spawn.y;
+  player.lastMovedAt = 0;
+}
+
+function facingForVector(dx, dy, fallback = 'down') {
+  if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+  if (Math.abs(dy) > 0.08) return dy < 0 ? 'up' : 'down';
+  return fallback;
 }
 
 function resetMatch(room) {
   room.phase = 'lobby';
+  room.lastTickAt = now();
   room.matchStartedAt = null;
   room.matchEndsAt = null;
   room.endedAt = null;
@@ -283,7 +455,7 @@ function resetMatch(room) {
   for (const player of room.players.values()) {
     player.role = 'non-infected';
     player.neutralized = false;
-    player.roomId = 'lobby';
+    placePlayerInRoom(player, 'reception');
     player.corruption = 'healthy';
     player.corruptionRemaining = 0;
     player.exposureSeconds = 0;
@@ -301,13 +473,41 @@ function shuffle(values) {
   return values;
 }
 
-function movePlayer(room, player, roomId) {
+function movePlayer(room, player, input = {}) {
   if (room.phase !== 'playing') throw new Error('Movement is locked.');
   if (player.dead) throw new Error('Dead players cannot move.');
-  const current = ROOM_BY_ID[player.roomId];
-  if (!current || !current.neighbors.includes(roomId)) throw new Error('That room is not adjacent.');
-  player.roomId = roomId;
-  room.lastEvent = `${player.name} moved to ${ROOM_BY_ID[roomId].name}.`;
+  const dx = clamp(Number(input.dx) || 0, -1, 1);
+  const dy = clamp(Number(input.dy) || 0, -1, 1);
+  const magnitude = Math.hypot(dx, dy);
+  if (magnitude < 0.08) return;
+
+  const scale = Math.min(1, magnitude);
+  player.facing = facingForVector(dx, dy, player.facing);
+  const vx = (dx / magnitude) * scale * MOVE_STEP;
+  const vy = (dy / magnitude) * scale * MOVE_STEP;
+  const currentX = Number.isFinite(player.x) ? player.x : spawnForRoom(player.roomId).x;
+  const currentY = Number.isFinite(player.y) ? player.y : spawnForRoom(player.roomId).y;
+  const target = point(clamp(currentX + vx, PLAYER_RADIUS, MAP.width - PLAYER_RADIUS), clamp(currentY + vy, PLAYER_RADIUS, MAP.height - PLAYER_RADIUS));
+  let next = point(currentX, currentY);
+
+  if (isPositionWalkable(target.x, target.y)) {
+    next = target;
+  } else if (isPositionWalkable(target.x, currentY)) {
+    next = point(target.x, currentY);
+  } else if (isPositionWalkable(currentX, target.y)) {
+    next = point(currentX, target.y);
+  }
+
+  player.x = next.x;
+  player.y = next.y;
+  if (next.x !== currentX || next.y !== currentY) {
+    player.lastMovedAt = now();
+  }
+  const previousRoomId = player.roomId;
+  player.roomId = roomAtPosition(player.x, player.y, player.roomId);
+  if (player.roomId !== previousRoomId) {
+    room.lastEvent = `${player.name} entered ${ROOM_BY_ID[player.roomId].name}.`;
+  }
   pushRoom(room);
 }
 
@@ -347,8 +547,8 @@ function workLab(room, player) {
 }
 
 function spawnFluShot(room, preferredRoomId) {
-  const eligible = ['pharmacy', 'laboratory', 'storage', 'triage', 'isolation'];
-  const roomId = preferredRoomId || eligible[Math.floor(Math.random() * eligible.length)];
+  const eligible = ['pharmacy', 'laboratory', 'icu', 'patient-ward', 'emergency-room', 'operating-room'];
+  const roomId = normalizeRoomId(preferredRoomId || eligible[Math.floor(Math.random() * eligible.length)]);
   room.fluShots[roomId] += 1;
 }
 
@@ -384,9 +584,9 @@ function maybeStartMeeting(room) {
   room.meetingEndVotes = new Set();
   room.meetingRequest = null;
   for (const player of activePlayers(room)) {
-    player.roomId = 'meeting';
+    placePlayerInRoom(player, MEETING_ROOM_ID);
   }
-  room.lastEvent = 'Meeting accepted. Everyone is gathering at Meeting Hall.';
+  room.lastEvent = 'Meeting accepted. Everyone is gathering in the Waiting Room.';
 }
 
 function voteFluShot(room, player, targetId) {
@@ -478,6 +678,22 @@ function applyFluShot(room, target) {
 }
 
 function tickRoom(room) {
+  const current = now();
+  const lastTickAt = room.lastTickAt || current;
+  const elapsedSeconds = Math.min(10, Math.floor((current - lastTickAt) / 1000));
+  if (elapsedSeconds <= 0) return false;
+  room.lastTickAt = lastTickAt + elapsedSeconds * 1000;
+
+  for (let index = 0; index < elapsedSeconds; index += 1) {
+    tickRoomSecond(room);
+    if (room.phase === 'ended') break;
+  }
+
+  pushRoom(room);
+  return true;
+}
+
+function tickRoomSecond(room) {
   if (room.phase === 'ended') return;
 
   if (room.phase === 'meeting' && room.meetingEndsAt && now() >= room.meetingEndsAt) {
@@ -495,7 +711,6 @@ function tickRoom(room) {
   }
 
   checkWinConditions(room);
-  pushRoom(room);
 }
 
 function tickContamination(room) {
@@ -593,8 +808,139 @@ function endRoom(room, winner, reason) {
   room.lastEvent = `${winner} win: ${reason}`;
 }
 
-function getRoomOrThrow(code) {
-  const room = rooms.get(String(code || '').toUpperCase());
+function roomPath(code) {
+  return `rooms/${String(code || '').toUpperCase()}.json`;
+}
+
+function serializeRoom(room) {
+  return {
+    ...room,
+    players: [...room.players.values()],
+    meetingRequest: room.meetingRequest
+      ? {
+          ...room.meetingRequest,
+          accepts: [...room.meetingRequest.accepts]
+        }
+      : null,
+    meetingEndVotes: [...room.meetingEndVotes]
+  };
+}
+
+function hydrateRoom(data) {
+  const players = (data.players || []).map((player) => {
+    const roomId = normalizeRoomId(player.roomId);
+    const spawn = spawnForRoom(roomId);
+    const x = Number.isFinite(player.x) ? player.x : spawn.x;
+    const y = Number.isFinite(player.y) ? player.y : spawn.y;
+    return {
+      ...player,
+      roomId: roomAtPosition(x, y, roomId),
+      x,
+      y,
+      facing: player.facing || 'down',
+      lastMovedAt: player.lastMovedAt || 0
+    };
+  });
+  const fluShots = emptyRoomCounts();
+  for (const [roomId, count] of Object.entries(data.fluShots || {})) {
+    const normalized = normalizeRoomId(roomId);
+    fluShots[normalized] = (fluShots[normalized] || 0) + count;
+  }
+  const contaminatedRooms = {};
+  for (const [roomId, expiresAt] of Object.entries(data.contaminatedRooms || {})) {
+    contaminatedRooms[normalizeRoomId(roomId)] = expiresAt;
+  }
+  const room = {
+    ...data,
+    players: new Map(players.map((player) => [player.id, player])),
+    meetingRequest: data.meetingRequest
+      ? {
+          ...data.meetingRequest,
+          accepts: new Set(data.meetingRequest.accepts || [])
+        }
+      : null,
+    meetingVotes: data.meetingVotes || {},
+    meetingEndVotes: new Set(data.meetingEndVotes || []),
+    fluShots,
+    contaminatedRooms,
+    lastTickAt: data.lastTickAt || now()
+  };
+  rooms.set(room.code, room);
+  return room;
+}
+
+async function loadRoom(code) {
+  const roomCode = String(code || '').toUpperCase();
+  if (!roomCode) return null;
+  const cachedRoom = rooms.get(roomCode) || null;
+
+  if (USE_BLOB_STORAGE) {
+    try {
+      const blob = await getBlob(roomPath(roomCode), { access: 'private', useCache: false });
+      if (blob && blob.statusCode === 200 && blob.stream) {
+        const body = await new Response(blob.stream).text();
+        return hydrateRoom(JSON.parse(body));
+      }
+    } catch (error) {
+      if (error.name !== 'BlobNotFoundError') warnStorageFallback(error);
+    }
+  }
+
+  const cache = roomCache();
+  if (cache) {
+    try {
+      const cached = await cache.get(`room:${roomCode}`);
+      if (cached) return hydrateRoom(typeof cached === 'string' ? JSON.parse(cached) : cached);
+    } catch (error) {
+      warnStorageFallback(error);
+    }
+  }
+
+  if (cachedRoom || ALLOW_MEMORY_STORAGE_FALLBACK) return cachedRoom;
+  throw new Error('Room storage is unavailable.');
+}
+
+async function saveRoom(room) {
+  rooms.set(room.code, room);
+  const serialized = serializeRoom(room);
+
+  if (USE_BLOB_STORAGE) {
+    try {
+      await putBlob(roomPath(room.code), JSON.stringify(serialized), {
+        access: 'private',
+        allowOverwrite: true,
+        contentType: 'application/json',
+        cacheControlMaxAge: 60
+      });
+      return;
+    } catch (error) {
+      warnStorageFallback(error);
+    }
+  }
+
+  const cache = roomCache();
+  if (cache) {
+    try {
+      await cache.set(`room:${room.code}`, serialized, {
+        ttl: ROOM_CACHE_TTL_SECONDS,
+        tags: ['hospital-room'],
+        name: `Hospital room ${room.code}`
+      });
+      return;
+    } catch (error) {
+      warnStorageFallback(error);
+    }
+  }
+
+  if (!ALLOW_MEMORY_STORAGE_FALLBACK) throw new Error('Room storage is unavailable.');
+}
+
+async function tickAndSaveRoom(room) {
+  if (tickRoom(room)) await saveRoom(room);
+}
+
+async function getRoomOrThrow(code) {
+  const room = await loadRoom(code);
   if (!room) throw new Error('Room not found.');
   return room;
 }
@@ -611,6 +957,14 @@ function json(res, status, payload) {
     'cache-control': 'no-store'
   });
   res.end(JSON.stringify(payload));
+}
+
+function svg(res, content) {
+  res.writeHead(200, {
+    'content-type': 'image/svg+xml; charset=utf-8',
+    'cache-control': 'no-store'
+  });
+  res.end(content);
 }
 
 function parseBody(req) {
@@ -634,13 +988,33 @@ function parseBody(req) {
 
 async function handleApi(req, res, pathname, parts, query) {
   try {
+    if (req.method === 'GET' && pathname === '/api/qr') {
+      const data = query.get('data') || '';
+      if (!data || data.length > 512) throw new Error('Invalid QR code data.');
+      const url = new URL(data);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Invalid QR code URL.');
+      const content = await QRCode.toString(url.toString(), {
+        type: 'svg',
+        width: 180,
+        margin: 1,
+        errorCorrectionLevel: 'M',
+        color: {
+          dark: '#101418',
+          light: '#ffffff'
+        }
+      });
+      return svg(res, content);
+    }
+
     if (req.method === 'POST' && pathname === '/api/rooms') {
       const room = createRoom();
+      await saveRoom(room);
       return json(res, 201, { code: room.code });
     }
 
     if (req.method === 'GET' && pathname === '/events') {
-      const room = getRoomOrThrow(query.get('room'));
+      const room = await getRoomOrThrow(query.get('room'));
+      await tickAndSaveRoom(room);
       const kind = query.get('kind') || 'host';
       const playerId = query.get('playerId') || null;
       res.writeHead(200, {
@@ -657,21 +1031,30 @@ async function handleApi(req, res, pathname, parts, query) {
     }
 
     if (parts[0] === 'api' && parts[1] === 'rooms' && parts[2]) {
-      const room = getRoomOrThrow(parts[2]);
+      const room = await getRoomOrThrow(parts[2]);
       const action = parts[3];
       const body = req.method === 'POST' ? await parseBody(req) : {};
 
       if (req.method === 'GET' && !action) {
+        await tickAndSaveRoom(room);
         return json(res, 200, publicState(room));
+      }
+
+      if (req.method === 'GET' && action === 'state') {
+        await tickAndSaveRoom(room);
+        const player = getPlayerOrThrow(room, query.get('playerId'));
+        return json(res, 200, privateState(room, player.id));
       }
 
       if (req.method === 'POST' && action === 'join') {
         const player = addPlayer(room, body.name);
+        await saveRoom(room);
         return json(res, 201, { playerId: player.id, code: room.code });
       }
 
       if (req.method === 'POST' && action === 'start') {
         startMatch(room);
+        await saveRoom(room);
         return json(res, 200, publicState(room));
       }
 
@@ -679,11 +1062,13 @@ async function handleApi(req, res, pathname, parts, query) {
         resetMatch(room);
         room.lastEvent = 'Match reset to lobby.';
         pushRoom(room);
+        await saveRoom(room);
         return json(res, 200, publicState(room));
       }
 
+      await tickAndSaveRoom(room);
       const player = getPlayerOrThrow(room, body.playerId);
-      if (req.method === 'POST' && action === 'move') movePlayer(room, player, body.roomId);
+      if (req.method === 'POST' && action === 'move') movePlayer(room, player, body);
       else if (req.method === 'POST' && action === 'infect-room') contaminateRoom(room, player);
       else if (req.method === 'POST' && action === 'pickup-flu') pickupFluShot(room, player);
       else if (req.method === 'POST' && action === 'work-lab') workLab(room, player);
@@ -693,6 +1078,7 @@ async function handleApi(req, res, pathname, parts, query) {
       else if (req.method === 'POST' && action === 'vote-end') voteEndMeeting(room, player);
       else throw new Error('Unknown action.');
 
+      await saveRoom(room);
       return json(res, 200, privateState(room, player.id));
     }
 
@@ -741,7 +1127,11 @@ const server = http.createServer((req, res) => {
 });
 
 setInterval(() => {
-  for (const room of rooms.values()) tickRoom(room);
+  for (const room of rooms.values()) {
+    if (tickRoom(room)) {
+      saveRoom(room).catch((error) => console.warn('Failed to save room tick.', error));
+    }
+  }
 }, 1000);
 
 server.listen(PORT, '0.0.0.0', () => {

@@ -10,5 +10,10 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.3.3",
+    "@vercel/functions": "^3.6.0",
+    "qrcode": "^1.5.4"
   }
 }

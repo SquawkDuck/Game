@@ -3,8 +3,11 @@ const params = new URLSearchParams(location.search);
 const path = location.pathname;
 
 let state = null;
-let source = null;
+let pollTimer = null;
 let busy = false;
+let moveBusy = false;
+let moveTimer = null;
+let joystickVector = { dx: 0, dy: 0 };
 
 const savedPlayerId = localStorage.getItem('hospital-player-id');
 const savedRoom = localStorage.getItem('hospital-room-code');
@@ -47,18 +50,48 @@ function roomName(roomId) {
   return state?.rooms?.find((room) => room.id === roomId)?.name || roomId;
 }
 
+function pct(value, total) {
+  return `${(Number(value || 0) / Number(total || 1)) * 100}%`;
+}
+
+function roomCenter(room) {
+  return {
+    x: room.area.x + room.area.width / 2,
+    y: room.area.y + room.area.height / 2
+  };
+}
+
 function connectEvents(kind, roomCode, playerId) {
-  if (source) source.close();
-  const query = new URLSearchParams({ kind, room: roomCode });
-  if (playerId) query.set('playerId', playerId);
-  source = new EventSource(`/events?${query.toString()}`);
-  source.onmessage = (event) => {
-    state = JSON.parse(event.data);
-    render();
+  if (pollTimer) clearInterval(pollTimer);
+  const loadState = async () => {
+    const endpoint = kind === 'host'
+      ? `/api/rooms/${roomCode}`
+      : `/api/rooms/${roomCode}/state?playerId=${encodeURIComponent(playerId || '')}`;
+    try {
+      const response = await fetch(endpoint, { cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'State update failed.');
+      state = payload;
+      render();
+    } catch (error) {
+      const message = error.message || 'State update failed.';
+      console.warn(message);
+      if (kind === 'player') {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = null;
+        localStorage.removeItem('hospital-player-id');
+        renderControllerJoin(roomCode, message === 'Player not found.' ? 'Join this room from this phone.' : message);
+      }
+    }
   };
-  source.onerror = () => {
-    console.warn('Event stream disconnected.');
-  };
+  loadState();
+  pollTimer = setInterval(loadState, 1000);
+}
+
+function applyState(payload) {
+  if (!payload || !payload.code || !payload.phase) return;
+  state = payload;
+  render();
 }
 
 function route() {
@@ -71,8 +104,10 @@ function route() {
   }
 
   if (path.startsWith('/controller')) {
-    const roomCode = params.get('room') || savedRoom;
-    const playerId = params.get('playerId') || savedPlayerId;
+    const requestedRoom = params.get('room');
+    const roomCode = requestedRoom || savedRoom;
+    const savedPlayerMatchesRoom = roomCode && savedRoom === roomCode;
+    const playerId = params.get('playerId') || (savedPlayerMatchesRoom ? savedPlayerId : null);
     if (roomCode && playerId) {
       connectEvents('player', roomCode, playerId);
       renderLoading('Opening controller...');
@@ -145,6 +180,7 @@ function renderHost() {
   if (!state) return renderLoading('Opening host screen...');
   app.className = 'host';
   const joinUrl = `${location.origin}/controller?room=${state.code}`;
+  const qrUrl = `/api/qr?data=${encodeURIComponent(joinUrl)}`;
   app.innerHTML = html`
     <header class="host-top">
       <div>
@@ -154,7 +190,7 @@ function renderHost() {
       <div class="host-code">
         <span>Room</span>
         <span class="code-pill">${escapeHtml(state.code)}</span>
-        <span>${escapeHtml(joinUrl)}</span>
+        <img class="join-qr" src="${escapeHtml(qrUrl)}" alt="Scan to join room ${escapeHtml(state.code)}">
       </div>
     </header>
     <section class="host-body">
@@ -165,26 +201,32 @@ function renderHost() {
 }
 
 function renderMap() {
-  const rooms = [...state.rooms].sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  const map = state.map || { image: '/hospital-map.png', width: 1254, height: 1254 };
   return html`
     <section class="map">
-      ${rooms.map((room) => {
-        const players = state.players.filter((player) => player.roomId === room.id);
-        const fluCount = state.fluShots?.[room.id] || 0;
-        return html`
-          <article class="room">
-            <h2>${escapeHtml(room.name)}</h2>
-            <div class="items">${Array.from({ length: fluCount }, () => '<span class="flu-token">F</span>').join('')}</div>
-            <div class="players">
-              ${players.map((player) => html`
-                <div class="player-token ${player.dead ? 'dead' : ''}" style="background:${player.color}" title="${escapeHtml(player.name)}">
-                  ${escapeHtml(player.name.slice(0, 2).toUpperCase())}
-                </div>
-              `).join('')}
-            </div>
-          </article>
-        `;
-      }).join('')}
+      <img class="map-image" src="${escapeHtml(map.image)}" alt="Hospital floor plan">
+      <div class="map-overlay">
+        ${state.rooms.map((room) => {
+          const center = roomCenter(room);
+          const fluCount = state.fluShots?.[room.id] || 0;
+          return Array.from({ length: fluCount }, (_, index) => html`
+            <span
+              class="flu-token map-flu-token"
+              style="left:${pct(center.x + index * 18, map.width)}; top:${pct(center.y - 34, map.height)}"
+            >F</span>
+          `).join('');
+        }).join('')}
+        ${state.players.map((player) => html`
+          <div
+            class="map-character facing-${escapeHtml(player.facing || 'down')} ${player.moving ? 'moving' : ''} ${player.dead ? 'dead' : ''}"
+            style="left:${pct(player.x, map.width)}; top:${pct(player.y, map.height)}; --player-color:${player.color}"
+            title="${escapeHtml(player.name)}"
+          >
+            <span class="character-sprite"></span>
+            <span class="character-badge">${escapeHtml(player.name.slice(0, 2).toUpperCase())}</span>
+          </div>
+        `).join('')}
+      </div>
     </section>
   `;
 }
@@ -201,13 +243,13 @@ function renderHostSide() {
               <div class="metric"><span>Match</span><strong>${fmtTime(state.matchSecondsLeft)}</strong></div>
               <div class="metric"><span>Meeting</span><strong>${fmtTime(state.meetingSecondsLeft)}</strong></div>
               <div class="metric"><span>Deaths</span><strong>${state.deaths}/${state.deathLimit}</strong></div>
-              <div class="metric"><span>Players</span><strong>${state.players.length}/10</strong></div>
+              <div class="metric"><span>Players</span><strong>${state.players.length}/${state.maxPlayers}</strong></div>
             </div>`}
       </section>
       ${state.phase === 'lobby' ? html`
         <section class="panel stack">
           <h3>Lobby</h3>
-          <p class="muted">Players join with the room code. Start when 4-10 players are ready.</p>
+          <p class="muted">Players join with the room code. Start when ${state.minPlayers}-${state.maxPlayers} players are ready.</p>
           <button class="primary" data-action="start-match" ${canStart ? '' : 'disabled'}>Start match</button>
         </section>
       ` : ''}
@@ -291,10 +333,10 @@ function renderPlayControls(self) {
   return html`
     <section class="panel stack">
       <h2>Move</h2>
-      <div class="button-grid">
-        ${self.neighbors.map((room) => html`
-          <button data-action="move" data-room-id="${room.id}" ${self.canMove ? '' : 'disabled'}>${escapeHtml(room.name)}</button>
-        `).join('')}
+      <div class="joystick ${self.canMove ? '' : 'disabled'}" data-joystick>
+        <div class="joystick-ring">
+          <div class="joystick-knob"></div>
+        </div>
       </div>
     </section>
     <section class="panel stack">
@@ -339,6 +381,76 @@ function renderMeetingControls(self) {
   `;
 }
 
+function updateJoystick(event, joystick) {
+  const ring = joystick.querySelector('.joystick-ring');
+  const knob = joystick.querySelector('.joystick-knob');
+  const bounds = ring.getBoundingClientRect();
+  const centerX = bounds.left + bounds.width / 2;
+  const centerY = bounds.top + bounds.height / 2;
+  const radius = bounds.width / 2;
+  const rawX = (event.clientX - centerX) / radius;
+  const rawY = (event.clientY - centerY) / radius;
+  const magnitude = Math.min(1, Math.hypot(rawX, rawY));
+  const angle = Math.atan2(rawY, rawX);
+  joystickVector = {
+    dx: Math.cos(angle) * magnitude,
+    dy: Math.sin(angle) * magnitude
+  };
+  knob.style.transform = `translate(${joystickVector.dx * 46}px, ${joystickVector.dy * 46}px)`;
+}
+
+function resetJoystick(joystick) {
+  joystickVector = { dx: 0, dy: 0 };
+  joystick?.querySelector('.joystick-knob')?.style.removeProperty('transform');
+  if (moveTimer) clearInterval(moveTimer);
+  moveTimer = null;
+}
+
+function startMoveLoop() {
+  if (moveTimer) return;
+  moveTimer = setInterval(sendMoveVector, 110);
+}
+
+async function sendMoveVector() {
+  if (moveBusy || !state?.self?.canMove) return;
+  if (Math.hypot(joystickVector.dx, joystickVector.dy) < 0.08) return;
+  moveBusy = true;
+  try {
+    await playerApi('move', joystickVector);
+  } catch (error) {
+    console.warn(error.message || 'Movement failed.');
+  } finally {
+    moveBusy = false;
+  }
+}
+
+document.addEventListener('pointerdown', (event) => {
+  const joystick = event.target.closest('[data-joystick]');
+  if (!joystick || joystick.classList.contains('disabled') || !state?.self?.canMove) return;
+  event.preventDefault();
+  joystick.dataset.activePointer = String(event.pointerId);
+  joystick.setPointerCapture?.(event.pointerId);
+  updateJoystick(event, joystick);
+  startMoveLoop();
+});
+
+document.addEventListener('pointermove', (event) => {
+  const joystick = document.querySelector(`[data-joystick][data-active-pointer="${event.pointerId}"]`);
+  if (!joystick) return;
+  event.preventDefault();
+  updateJoystick(event, joystick);
+});
+
+function releaseJoystick(event) {
+  const joystick = document.querySelector(`[data-joystick][data-active-pointer="${event.pointerId}"]`);
+  if (!joystick) return;
+  joystick.removeAttribute('data-active-pointer');
+  resetJoystick(joystick);
+}
+
+document.addEventListener('pointerup', releaseJoystick);
+document.addEventListener('pointercancel', releaseJoystick);
+
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button || busy) return;
@@ -362,17 +474,16 @@ document.addEventListener('click', async (event) => {
       return;
     }
 
-    if (action === 'start-match') await api(`/api/rooms/${state.code}/start`);
-    if (action === 'move') await playerApi('move', { roomId: button.dataset.roomId });
-    if (action === 'infect-room') await playerApi('infect-room');
-    if (action === 'pickup-flu') await playerApi('pickup-flu');
-    if (action === 'work-lab') await playerApi('work-lab');
-    if (action === 'request-meeting') await playerApi('request-meeting');
-    if (action === 'accept-meeting') await playerApi('accept-meeting');
-    if (action === 'vote-end') await playerApi('vote-end');
+    if (action === 'start-match') applyState(await api(`/api/rooms/${state.code}/start`));
+    if (action === 'infect-room') applyState(await playerApi('infect-room'));
+    if (action === 'pickup-flu') applyState(await playerApi('pickup-flu'));
+    if (action === 'work-lab') applyState(await playerApi('work-lab'));
+    if (action === 'request-meeting') applyState(await playerApi('request-meeting'));
+    if (action === 'accept-meeting') applyState(await playerApi('accept-meeting'));
+    if (action === 'vote-end') applyState(await playerApi('vote-end'));
     if (action === 'vote-flu') {
       const targetId = document.getElementById('vote-target')?.value;
-      await playerApi('vote-flu', { targetId });
+      applyState(await playerApi('vote-flu', { targetId }));
     }
   } catch (error) {
     alert(error.message || 'Action failed.');

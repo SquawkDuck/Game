@@ -280,8 +280,8 @@ The first game concept is a social-deduction infection game inspired by Among Us
 - Players can vote at any time during the meeting and can end the meeting early if the vote is complete.
 - Meeting early-end rule: majority of active eligible players can end the meeting early.
 - First prototype supports up to 10 players.
-- First prototype can start with 4 players minimum.
-- Starting true infected count scales by lobby size: 1 true infected at 4 players, 3 true infected at 10 players.
+- First prototype can start with 1 player minimum.
+- Starting true infected count scales by lobby size: 1 true infected at 1-5 players, 3 true infected at 10 players.
 - Full match length target: 10 minutes.
 - First prototype map theme: hospital.
 - Hospital map should be compact to maximize shared-screen readability and keep all key action visible.
@@ -320,8 +320,8 @@ The first game concept is a social-deduction infection game inspired by Among Us
 - Meeting early-end decision: a majority vote can close the meeting before the 5-minute timer expires.
 - Planning direction: stop expanding meeting rules for now and move to less-defined core game areas.
 - Player count decision: support up to 10 players in the first prototype.
-- Player count decision: 4-player minimum, 10-player maximum.
-- Starting role count decision: 1 true infected in a 4-player match, 3 true infected in a 10-player match.
+- Player count decision: 1-player minimum, 10-player maximum.
+- Starting role count decision: 1 true infected in a 1-5 player match, 3 true infected in a 10-player match.
 - Match length decision: 10 minutes.
 - Map theme decision: hospital.
 - Map layout decision: compact hospital layout optimized for the shared screen.
@@ -531,7 +531,7 @@ The first game concept is a social-deduction infection game inspired by Among Us
 2. Add room creation, room-code join, player registration, and reconnect-tolerant player IDs.
 3. Render a compact 9-room hospital map on the shared screen.
 4. Let phones control player movement between rooms.
-5. Assign roles at match start using the 4-10 player scaling rule.
+5. Assign roles at match start using the 1-10 player scaling rule.
 6. Implement private phone-only role and corruption state.
 7. Implement exposure from contagious players and contagious rooms.
 8. Implement the true infected phone action to contaminate the current room.
@@ -544,7 +544,7 @@ The first game concept is a social-deduction infection game inspired by Among Us
 
 - A host can create a room and show the shared hospital screen.
 - Phones can join with a room code and control individual players.
-- The game supports 4-10 players.
+- The game supports 1-10 players.
 - Roles and infection state are only visible on the relevant phone.
 - The shared screen never reveals true infected, corruption stage, contaminated rooms, or private symptoms.
 - Meetings are requested and accepted from phones by majority.

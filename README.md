@@ -18,9 +18,9 @@ Create a room on the host screen, then join from phones using the room code or t
 
 ## Prototype Rules
 
-- 4-10 players.
+- 1-10 players.
 - 10-minute matches.
-- 1 true infected at 4-5 players, 2 at 6-8, 3 at 9-10.
+- 1 true infected at 1-5 players, 2 at 6-8, 3 at 9-10.
 - Non-infected win by voting flu shots onto all true infected.
 - Infected win if too many players die and the hospital closes, or if time expires while a true infected remains active.
 - Infection state and true infected roles are private to phone screens.

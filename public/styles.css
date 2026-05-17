@@ -112,9 +112,10 @@ input {
 }
 
 .host {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-rows: auto 1fr;
+  overflow: hidden;
 }
 
 .host-top {
@@ -150,19 +151,144 @@ input {
   letter-spacing: 0.12em;
 }
 
+.join-qr {
+  width: 96px;
+  height: 96px;
+  flex: 0 0 auto;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px;
+}
+
 .host-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 14px;
   padding: 14px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .map {
+  position: relative;
+  width: 100%;
+  max-width: calc(100vh - 152px);
+  max-height: calc(100vh - 152px);
+  align-self: start;
+  justify-self: center;
+  aspect-ratio: 1;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0d131a;
+}
+
+.map-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.map-overlay {
+  position: absolute;
+  inset: 0;
+}
+
+.map-character {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 58px;
+  height: 74px;
+  filter: drop-shadow(0 5px 7px rgba(0, 0, 0, 0.48));
+}
+
+.character-sprite {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 76px;
+  height: 76px;
+  transform: translateX(-50%);
+  background-image: url("/nurse-walk.png");
+  background-size: 400% 400%;
+  background-repeat: no-repeat;
+  background-position-x: 0%;
+}
+
+.map-character.facing-down .character-sprite {
+  background-position-y: 0%;
+}
+
+.map-character.facing-left .character-sprite {
+  background-position-y: 33.333%;
+}
+
+.map-character.facing-right .character-sprite {
+  background-position-y: 66.666%;
+}
+
+.map-character.facing-up .character-sprite {
+  background-position-y: 100%;
+}
+
+.map-character.moving .character-sprite {
+  animation: walk-cycle 560ms infinite;
+}
+
+.map-character.dead {
+  opacity: 0.45;
+  filter: grayscale(1) drop-shadow(0 5px 7px rgba(0, 0, 0, 0.48));
+}
+
+.character-badge {
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  transform: translateX(-50%);
+  min-width: 26px;
+  height: 20px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(3, minmax(150px, 1fr));
-  gap: 10px;
-  min-height: calc(100vh - 94px);
+  place-items: center;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  background: var(--player-color);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+@keyframes walk-cycle {
+  0%,
+  24.99% {
+    background-position-x: 0%;
+  }
+
+  25%,
+  49.99% {
+    background-position-x: 33.333%;
+  }
+
+  50%,
+  74.99% {
+    background-position-x: 66.666%;
+  }
+
+  75%,
+  100% {
+    background-position-x: 100%;
+  }
+}
+
+.map-flu-token {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
 }
 
 .room {
@@ -326,6 +452,62 @@ input {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.joystick {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  touch-action: none;
+  user-select: none;
+}
+
+.joystick.disabled {
+  opacity: 0.45;
+}
+
+.joystick-ring {
+  position: relative;
+  width: 156px;
+  height: 156px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background:
+    radial-gradient(circle at center, rgba(45, 212, 191, 0.16), transparent 42%),
+    #101821;
+}
+
+.joystick-ring::before,
+.joystick-ring::after {
+  content: "";
+  position: absolute;
+  background: rgba(152, 167, 183, 0.28);
+}
+
+.joystick-ring::before {
+  left: 50%;
+  top: 18px;
+  width: 1px;
+  height: calc(100% - 36px);
+}
+
+.joystick-ring::after {
+  top: 50%;
+  left: 18px;
+  width: calc(100% - 36px);
+  height: 1px;
+}
+
+.joystick-knob {
+  position: absolute;
+  left: calc(50% - 34px);
+  top: calc(50% - 34px);
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.58);
+  background: var(--accent);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+}
+
 .danger {
   color: #190a0a;
   background: var(--danger);
@@ -362,11 +544,15 @@ input {
 
   .map {
     min-height: 0;
-    grid-template-rows: repeat(3, 128px);
   }
 
   .host-top {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .host-code {
+    width: 100%;
+    justify-content: space-between;
   }
 }
