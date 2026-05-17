@@ -1,0 +1,14 @@
+- main [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Hospital Infection" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Shared-screen hidden infection prototype with phone controllers.
+    - generic [ref=e8]:
+      - heading "Host a match" [level=2] [ref=e9]
+      - paragraph [ref=e10]: Create a room on the big screen, then players join from phones using the room code.
+      - button "Create host room" [ref=e11] [cursor=pointer]
+    - generic [ref=e12]:
+      - heading "Join by phone" [level=2] [ref=e13]
+      - textbox "Room code" [ref=e14]
+      - textbox "Player name" [ref=e15]
+      - button "Join as controller" [ref=e16] [cursor=pointer]

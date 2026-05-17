@@ -1,0 +1,10 @@
+- main [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Controller" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Join the hospital room from this phone.
+    - generic [ref=e8]:
+      - heading "Join room" [level=2] [ref=e9]
+      - textbox "Room code" [ref=e10]: 4588C
+      - textbox "Player name" [ref=e11]
+      - button "Join" [ref=e12] [cursor=pointer]

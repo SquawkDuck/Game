@@ -1,0 +1,50 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - heading "Hospital Infection" [level=1] [ref=e5]
+      - generic [ref=e6]: Room created.
+    - generic [ref=e7]:
+      - generic [ref=e8]: Room
+      - generic [ref=e9]: 4588C
+      - generic [ref=e10]: http://localhost:3000/controller?room=4588C
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - article [ref=e13]:
+        - heading "Meeting Hall" [level=2] [ref=e14]
+      - article [ref=e16]:
+        - heading "Triage" [level=2] [ref=e17]
+      - article [ref=e19]:
+        - heading "Pharmacy" [level=2] [ref=e20]
+      - article [ref=e22]:
+        - heading "Ward A" [level=2] [ref=e23]
+      - article [ref=e25]:
+        - heading "Lobby" [level=2] [ref=e26]
+      - article [ref=e28]:
+        - heading "Laboratory" [level=2] [ref=e29]
+      - article [ref=e31]:
+        - heading "Ward B" [level=2] [ref=e32]
+      - article [ref=e34]:
+        - heading "Storage" [level=2] [ref=e35]
+      - article [ref=e37]:
+        - heading "Isolation" [level=2] [ref=e38]
+    - complementary [ref=e40]:
+      - generic [ref=e41]:
+        - heading "Lobby" [level=2] [ref=e42]
+        - generic [ref=e43]:
+          - generic [ref=e44]:
+            - generic [ref=e45]: Match
+            - strong [ref=e46]: "--:--"
+          - generic [ref=e47]:
+            - generic [ref=e48]: Meeting
+            - strong [ref=e49]: "--:--"
+          - generic [ref=e50]:
+            - generic [ref=e51]: Deaths
+            - strong [ref=e52]: 0/3
+          - generic [ref=e53]:
+            - generic [ref=e54]: Players
+            - strong [ref=e55]: 0/10
+      - generic [ref=e56]:
+        - heading "Lobby" [level=3] [ref=e57]
+        - paragraph [ref=e58]: Players join with the room code. Start when 4-10 players are ready.
+        - button "Start match" [disabled] [ref=e59]
+      - heading "Roster" [level=3] [ref=e61]

@@ -1,0 +1,14 @@
+{
+  "name": "hospital-infection-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local shared-screen hospital infection game prototype with phone controllers.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
